@@ -3,3 +3,4 @@
 *.cmx
 *.o
 *.opt
+regression/test*.log
