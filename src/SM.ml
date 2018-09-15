@@ -22,8 +22,37 @@ type config = int list * Syntax.Stmt.config
      val eval : config -> prg -> config
 
    Takes a configuration and a program, and returns a configuration as a result
- *)                         
-let eval _ = failwith "Not yet implemented"
+ *)
+let rec eval (stack, ((state, input, output) as config)) instructions = match instructions with
+  | inst :: instructions ->
+    let config' = begin match inst with
+      | BINOP op -> 
+        begin match stack with
+          | right :: left :: stack' -> ((Syntax.Expr.evalBinop op left right) :: stack', config)
+          | _ -> failwith("Empty stack 1")
+        end
+      | CONST x -> (x :: stack, config)
+      | READ ->
+        begin match input with
+          | x :: input' -> (x :: stack, (state, input', output))
+          | [] -> failwith("Empty input 2")
+        end
+      | WRITE ->
+        begin match stack with
+          | x :: stack' -> (stack', (state, input, x :: output))
+          | [] -> failwith("Empty stack 3")
+        end
+      | LD var ->
+        let value = state var
+        in (value :: stack, config)
+      | ST var ->
+        begin match stack with
+          | x :: stack' -> (stack', (Syntax.Expr.update var x state, input, output))
+          | [] -> failwith("Empty stack 4")
+        end
+      end
+    in eval config' instructions
+  | [] -> (stack, config)
 
 (* Top-level evaluation
 
@@ -41,4 +70,14 @@ let run i p = let (_, (_, _, o)) = eval ([], (Syntax.Expr.empty, i, [])) p in o
    stack machine
  *)
 
-let compile _ = failwith "Not yet implemented"
+let rec compile stmt = 
+  let rec compileExpr expr = match expr with
+    | Syntax.Expr.Const x -> [CONST x]
+    | Syntax.Expr.Var var -> [LD var]
+    | Syntax.Expr.Binop (op, left, right) -> compileExpr left @ compileExpr right @ [BINOP op]
+  in match stmt with
+    | Syntax.Stmt.Read var -> [READ; ST var]
+    | Syntax.Stmt.Write expr -> compileExpr expr @ [WRITE]
+    | Syntax.Stmt.Assign (var, expr) -> compileExpr expr @ [ST var]
+    | Syntax.Stmt.Seq (stmt1, stmt2) -> compile stmt1 @ compile stmt2
+
