@@ -37,6 +37,25 @@ module Expr =
     *)
     let update x v s = fun y -> if x = y then v else s y
 
+    let intToBool i = if (i == 0) then false else true
+    let boolToInt b = if b then 1 else 0
+    
+    let evalBinop op left right = match op with
+        | "!!" -> boolToInt(intToBool(left) || intToBool(right))
+        | "&&" -> boolToInt(intToBool(left) && intToBool(right))
+        | "==" -> boolToInt(left == right)
+        | "!=" -> boolToInt(left <> right)
+        | "<=" -> boolToInt(left <= right)
+        | ">=" -> boolToInt(left >= right)
+        | "<"  -> boolToInt(left < right)
+        | ">"  -> boolToInt(left > right)
+        | "+"  -> left + right
+        | "-"  -> left - right
+        | "*"  -> left * right
+        | "/"  -> left / right
+        | "%"  -> left mod right
+        | _ -> failwith("Unknown operator")
+
     (* Expression evaluator
 
           val eval : state -> t -> int
@@ -44,7 +63,14 @@ module Expr =
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
     *)
-    let eval _ = failwith "Not implemented yet"
+    let rec eval state expr = 
+      match expr with
+      | Const value -> value
+      | Var variable -> state variable
+      | Binop (op, left_expr, right_expr) -> 
+        let left = eval state left_expr
+        and right = eval state right_expr 
+        in evalBinop op left right
 
     (* Expression parser. You can use the following terminals:
 
@@ -78,7 +104,21 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let eval _ = failwith "Not implemented yet"
+    let rec eval ((state, input, output) as config) stmt = 
+      match stmt with
+        | Read variable -> begin match input with
+          | value :: input' -> 
+            let state' = Expr.update variable value state 
+            in (state', input', output)
+          | [] -> failwith("Empty input")
+          end
+        | Write expr -> 
+          let output' = (Expr.eval state expr) :: output 
+          in (state, input, output')
+        | Assign (variable, expr) -> 
+          let state' = Expr.update variable (Expr.eval state expr) state 
+          in (state', input, output)
+        | Seq (stmt1, stmt2) -> eval (eval config stmt1) stmt2
 
     (* Statement parser *)
     ostap (
