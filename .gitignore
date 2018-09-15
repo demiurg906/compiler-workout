@@ -3,4 +3,5 @@
 *.cmx
 *.o
 *.opt
-regression/test*.log
+*.log
+!*/orig
