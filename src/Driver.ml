@@ -31,11 +31,11 @@ let main =
        in
        let input = read [] in	
        let output = 
-	 if interpret 
-	 then Language.eval prog input 
-	 else SM.run (SM.compile prog) input
-       in
-       List.iter (fun i -> Printf.printf "%d\n" i) output
+        if interpret 
+        then Language.eval prog input 
+        else SM.run (SM.compile prog) input
+            in
+            List.iter (fun i -> Printf.printf "%d\n" i) output
     | `Fail er -> Printf.printf "Syntax error: %s" er
   with Invalid_argument _ ->
     Printf.printf "Usage: rc [-i] <input file.expr>\n"

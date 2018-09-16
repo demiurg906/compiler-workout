@@ -2,6 +2,7 @@
    The library provides "@type ..." syntax extension and plugins like show, etc.
 *)
 open GT
+open Ostap
 
 (* Opening a library for combinator-based syntax analysis *)
 open Ostap.Combinators
@@ -72,6 +73,8 @@ module Expr =
         and right = eval state right_expr 
         in evalBinop op left right
 
+    let binop op left right = Binop (op, left, right)
+
     (* Expression parser. You can use the following terminals:
 
          IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
@@ -79,7 +82,21 @@ module Expr =
    
     *)
     ostap (
-      parse: empty {failwith "Not implemented yet"}
+      expr:
+        !(Util.expr
+        (fun x -> x)
+        [|
+          `Lefta, [ostap ("!!"), binop "!!"];
+          `Lefta, [ostap ("&&"), binop "&&"];
+          `Nona,  [ostap ("<="), binop "<="; ostap ("<"),  binop "<"; ostap (">="),  binop ">="; ostap (">"),  binop ">"];
+          `Nona,  [ostap ("=="), binop "=="; ostap ("!="), binop "!="];
+          `Lefta, [ostap ("-"),  binop "-"; ostap ("+"),  binop "+" ];
+          `Lefta, [ostap ("*"),  binop "*"; ostap ("/"),  binop "/"; ostap ("%"),  binop "%" ];
+        |]
+        main
+        );
+
+      main: id:IDENT { Var id } | value:DECIMAL { Const value } | -"(" expr -")"
     )
 
   end
@@ -113,7 +130,7 @@ module Stmt =
           | [] -> failwith("Empty input")
           end
         | Write expr -> 
-          let output' = (Expr.eval state expr) :: output 
+          let output' = output @ [Expr.eval state expr]
           in (state, input, output')
         | Assign (variable, expr) -> 
           let state' = Expr.update variable (Expr.eval state expr) state 
@@ -122,7 +139,15 @@ module Stmt =
 
     (* Statement parser *)
     ostap (
-      parse: empty {failwith "Not implemented yet"}
+      read: -"read" -"(" id:IDENT -")" { Read id};
+      write: -"write" -"(" e:!(Expr.expr) -")" { Write e };
+      assign: id:IDENT -":=" expr:!(Expr.expr) { Assign (id, expr)};
+      statement: read | write | assign;
+      parse: <st::sts> :
+        !(Util.listBy)
+        [ostap (-";")]
+        [statement]
+        { List.fold_left (fun st1 st2 -> Seq (st1, st2) ) st sts}
     )
       
   end

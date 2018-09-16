@@ -40,7 +40,7 @@ let rec eval (stack, ((state, input, output) as config)) instructions = match in
         end
       | WRITE ->
         begin match stack with
-          | x :: stack' -> (stack', (state, input, x :: output))
+          | x :: stack' -> (stack', (state, input, output @ [x]))
           | [] -> failwith("Empty stack 3")
         end
       | LD var ->
