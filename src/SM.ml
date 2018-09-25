@@ -24,7 +24,36 @@ type config = int list * Stmt.config
 
    Takes a configuration and a program, and returns a configuration as a result
 *)                         
-let rec eval conf prog = failwith "Not yet implemented"
+let rec eval (stack, ((state, input, output) as config)) instructions = match instructions with
+  | inst :: instructions ->
+    let config' = begin match inst with
+      | BINOP op -> 
+        begin match stack with
+          | right :: left :: stack' -> ((Language.Expr.evalBinop op left right) :: stack', config)
+          | _ -> failwith("Empty stack 1")
+        end
+      | CONST x -> (x :: stack, config)
+      | READ ->
+        begin match input with
+          | x :: input' -> (x :: stack, (state, input', output))
+          | [] -> failwith("Empty input 2")
+        end
+      | WRITE ->
+        begin match stack with
+          | x :: stack' -> (stack', (state, input, output @ [x]))
+          | [] -> failwith("Empty stack 3")
+        end
+      | LD var ->
+        let value = state var
+        in (value :: stack, config)
+      | ST var ->
+        begin match stack with
+          | x :: stack' -> (stack', (Language.Expr.update var x state, input, output))
+          | [] -> failwith("Empty stack 4")
+        end
+      end
+    in eval config' instructions
+| [] -> (stack, config)
 
 (* Top-level evaluation
 
