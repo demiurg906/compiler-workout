@@ -117,7 +117,7 @@ class env =
     (* gets all global variables *)      
     method globals = S.elements globals
   end
-
+  
 (* Symbolic stack machine evaluator
 
      compile : env -> prg -> env * instr list
@@ -197,7 +197,7 @@ let rec compile (env : env) (prg : insn list) =
       let env'', x86_insts = compile env' prg 
       in env'', x86_ins @ x86_insts
     | [] -> env, []
-
+    
 (* compiles a unit: generates x86 machine code for the stack program and surrounds it
    with function prologue/epilogue
 *)
