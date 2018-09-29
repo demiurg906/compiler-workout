@@ -4,6 +4,6 @@
 *.o
 *.opt
 *.log
-!**/orig/*.log
+!*/orig
 *.s
 
