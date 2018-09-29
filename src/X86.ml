@@ -73,15 +73,6 @@ let show instr =
 (* Opening stack machine to use instructions without fully qualified names *)
 open SM
 
-(* Symbolic stack machine evaluator
-
-     compile : env -> prg -> env * instr list
-
-   Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
-   of x86 instructions
-*)
-let compile _ _ = failwith "Not yet implemented"
-
 (* A set of strings *)           
 module S = Set.Make (String)
 
@@ -98,14 +89,14 @@ class env =
     (* allocates a fresh position on a symbolic stack *)
     method allocate =    
       let x, n =
-	let rec allocate' = function
+	let rec allocate' : opnd list -> opnd * int = function
 	| []                            -> ebx     , 0
 	| (S n)::_                      -> S (n+1) , n+1
 	| (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
 	| _                             -> S 0     , 1
 	in
 	allocate' stack
-      in
+      in 
       x, {< stack_slots = max n stack_slots; stack = x::stack >}
 
     (* pushes an operand to the symbolic stack *)
@@ -118,7 +109,7 @@ class env =
     method pop2 = let x::y::stack' = stack in x, y, {< stack = stack' >}
 
     (* registers a global variable in the environment *)
-    method global x  = {< globals = S.add ("global_" ^ x) globals >}
+    method global x = {< globals = S.add ("global_" ^ x) globals >}
 
     (* gets the number of allocated stack slots *)
     method allocated = stack_slots
@@ -126,6 +117,86 @@ class env =
     (* gets all global variables *)      
     method globals = S.elements globals
   end
+
+(* Symbolic stack machine evaluator
+
+     compile : env -> prg -> env * instr list
+
+   Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
+   of x86 instructions
+*)
+let rec compile (env : env) (prg : insn list) =
+  let is_hardware (opnd : opnd) : bool = match opnd with
+    | R _ -> true
+    | L _ -> true
+    | _ -> false
+  in
+  
+  let mov (p1 : opnd) (p2 : opnd) : instr list = 
+    if (is_hardware p1 || is_hardware p2)
+      then [Mov (p1, p2)]
+      else [Mov (p1, eax); Mov (eax, p2)]
+  in
+
+  let binop (op : string) (left : opnd) (right : opnd) : instr list =
+    if (is_hardware left || is_hardware right)
+      then [Binop (op, left, right)]
+      else [Mov (right, eax); Binop (op, left, eax); Mov (eax, right)]
+  in
+
+  let step (env : env) (ins : insn) : env * instr list = match ins with
+    | CONST value ->
+      let mem, env = env#allocate
+      in env, [Mov (L value, mem)]
+    
+    | READ ->
+      let mem, env = env#allocate
+      in env, [Call "Lread"; Mov (eax, mem)]
+
+    | WRITE ->
+      let value, env = env#pop
+      in env, [Push value; Call "Lwrite"; Pop eax]
+  
+    | ST var ->
+      let env' = env#global var in
+      let value, env'' = env'#pop
+      in env'', (mov value (M env''#loc var))
+    
+    | LD var ->
+      let mem, env = (env#global var)#allocate
+      in env, mov (M (env#loc var)) mem
+
+    | BINOP op ->
+      let x_mem, y_mem, env = env#pop2 in
+      let res_mem, env = env#allocate
+      in env, match op with
+        | "+" | "-" | "*" -> (binop op x_mem y_mem) @ (mov y_mem res_mem)
+        
+        | "/" -> [Mov (y_mem, eax); Cltd; IDiv x_mem; Mov (eax, res_mem)]
+        
+        | "%" -> [Mov (y_mem, eax); Cltd; IDiv x_mem; Mov (edx, res_mem)]
+
+        | "&&" | "!!" -> [Binop ("^", eax, eax); Binop ("^", edx, edx);
+                          Binop ("cmp", L 0, x_mem); Set ("nz", "%al");
+                          Binop ("cmp", L 0, y_mem); Set ("nz", "%dl");
+                          Binop (op, eax, edx); Mov (edx, res_mem)]
+        
+        | op -> 
+          let x86_op = match op with
+            | "<" -> "l"
+            | ">" -> "g"
+            | "<=" -> "le"
+            | ">=" -> "ge"
+            | "==" -> "e"
+            | "!=" -> "ne"
+          in (binop "cmp" x_mem y_mem) @ [Mov (L 0, eax); Set (x86_op, "%al"); Mov (eax, res_mem)]
+  
+  in match prg with
+    | instr::prg ->
+      let env', x86_ins = step env instr in
+      let env'', x86_insts = compile env' prg 
+      in env'', x86_ins @ x86_insts
+    | [] -> env, []
 
 (* compiles a unit: generates x86 machine code for the stack program and surrounds it
    with function prologue/epilogue
