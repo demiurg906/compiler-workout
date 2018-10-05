@@ -2,10 +2,14 @@
    The library provides "@type ..." syntax extension and plugins like show, etc.
 *)
 open GT
+open Ostap
 
 (* Opening a library for combinator-based syntax analysis *)
 open Ostap.Combinators
        
+let intToBool i = if (i == 0) then false else true
+let boolToInt b = if b then 1 else 0
+
 (* Simple expressions: syntax and semantics *)
 module Expr =
   struct
@@ -36,27 +40,63 @@ module Expr =
       to value v and returns the new state.
     *)
     let update x v s = fun y -> if x = y then v else s y
+    
+    let evalBinop op left right = match op with
+        | "!!" -> boolToInt(intToBool(left) || intToBool(right))
+        | "&&" -> boolToInt(intToBool(left) && intToBool(right))
+        | "==" -> boolToInt(left == right)
+        | "!=" -> boolToInt(left <> right)
+        | "<=" -> boolToInt(left <= right)
+        | ">=" -> boolToInt(left >= right)
+        | "<"  -> boolToInt(left < right)
+        | ">"  -> boolToInt(left > right)
+        | "+"  -> left + right
+        | "-"  -> left - right
+        | "*"  -> left * right
+        | "/"  -> left / right
+        | "%"  -> left mod right
+        | _ -> failwith("Unknown operator")
 
     (* Expression evaluator
-
           val eval : state -> t -> int
  
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
-    *)                                                       
-    let eval st expr = failwith "Not yet implemented"
+    *)
+    let rec eval state expr = 
+      match expr with
+      | Const value -> value
+      | Var variable -> state variable
+      | Binop (op, left_expr, right_expr) -> 
+        let left = eval state left_expr
+        and right = eval state right_expr 
+        in evalBinop op left right
+
+    let binop op left right = Binop (op, left, right)
 
     (* Expression parser. You can use the following terminals:
-
          IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
          DECIMAL --- a decimal constant [0-9]+ as a string
-                                                                                                                  
+   
     *)
-    ostap (                                      
-      parse: empty {failwith "Not yet implemented"}
+    ostap (
+      expr:
+        !(Util.expr
+        (fun x -> x)
+        [|
+          `Lefta, [ostap ("!!"), binop "!!"];
+          `Lefta, [ostap ("&&"), binop "&&"];
+          `Nona,  [ostap ("<="), binop "<="; ostap ("<"),  binop "<"; ostap (">="),  binop ">="; ostap (">"),  binop ">"];
+          `Nona,  [ostap ("=="), binop "=="; ostap ("!="), binop "!="];
+          `Lefta, [ostap ("-"),  binop "-"; ostap ("+"),  binop "+" ];
+          `Lefta, [ostap ("*"),  binop "*"; ostap ("/"),  binop "/"; ostap ("%"),  binop "%" ];
+        |]
+        main
+        );
+
+      main: id:IDENT { Var id } | value:DECIMAL { Const value } | -"(" expr -")"
     )
-    
-  end
+end
                     
 (* Simple statements: syntax and sematics *)
 module Stmt =
@@ -71,7 +111,7 @@ module Stmt =
     (* empty statement                  *) | Skip
     (* conditional                      *) | If     of Expr.t * t * t
     (* loop with a pre-condition        *) | While  of Expr.t * t
-    (* loop with a post-condition       *) (* add yourself *)  with show
+    (* loop with a post-condition       *) | Repeat of Expr.t * t with show
                                                                     
     (* The type of configuration: a state, an input stream, an output stream *)
     type config = Expr.state * int list * int list 
@@ -82,14 +122,55 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let rec eval conf stmt = failwith "Not yet implemented"
-                               
+    let rec eval ((state, input, output) as config) stmt = 
+      match stmt with
+        | Read variable -> begin match input with
+          | value :: input' -> 
+            let state' = Expr.update variable value state 
+            in (state', input', output)
+          | [] -> failwith("Empty input")
+          end
+        | Write expr -> 
+          let output' = output @ [Expr.eval state expr]
+          in (state, input, output')
+        | Assign (variable, expr) -> 
+          let state' = Expr.update variable (Expr.eval state expr) state 
+          in (state', input, output)
+        | Seq (stmt1, stmt2) -> eval (eval config stmt1) stmt2
+        | Skip -> config
+        | If (cond, thenBlock, elseBlock) -> 
+          if (intToBool (Expr.eval state cond))
+          then eval config thenBlock
+          else eval config elseBlock
+        | While (cond, block) ->
+          if (intToBool (Expr.eval state cond))
+          then let config' = eval config block
+            in eval config' (While (cond, block))
+          else config
+        | Repeat (cond, block) ->
+          let config' = eval config block
+          in if (not (intToBool (Expr.eval state cond)))
+              then eval config' (Repeat (cond, block))
+              else config'
+
     (* Statement parser *)
     ostap (
-      parse: empty {failwith "Not yet implemented"}
+      read: -"read" -"(" id:IDENT -")" { Read id };
+      write: -"write" -"(" e:!(Expr.expr) -")" { Write e };
+      assign: id:IDENT -":=" expr:!(Expr.expr) { Assign (id, expr)};
+      skip: -"skip" { Skip };
+      ifOp: -"if" cond:!(Expr.expr) -"then" thenBlock:parse -"else" elseBlock:parse -"fi" { If (cond, thenBlock, elseBlock) };
+      whileLoop: -"while" cond:!(Expr.expr) -"do" block:parse -"od" { While (cond, block) };
+      repeatLoop: -"repeat" block:parse -"until" cond:!(Expr.expr) { Repeat (cond, block) };
+      statement: read | write | assign | skip | ifOp | whileLoop | repeatLoop ;
+      parse: <st::sts> :
+        !(Util.listBy)
+        [ostap (-";")]
+        [statement]
+        { List.fold_left (fun st1 st2 -> Seq (st1, st2) ) st sts}
     )
       
-  end
+end
 
 (* The top-level definitions *)
 
