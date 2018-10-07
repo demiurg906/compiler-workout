@@ -107,14 +107,17 @@ let rec compile stmt =
     | Stmt.Read x        -> [READ; ST x]
     | Stmt.Write e       -> expr e @ [WRITE]
     | Stmt.Assign (x, e) -> expr e @ [ST x]
+    | Stmt.Skip -> []
     | Stmt.If (cond, thenBlock, elseBlock) -> 
       let elseLabel = labelManager#new_label in
       let endLabel  = labelManager#new_label
-      in [CJMP ("z", elseLabel)] 
+      in expr cond
+       @ [CJMP ("z", elseLabel)] 
        @ compile' labelManager thenBlock 
        @ [JMP endLabel; LABEL elseLabel] 
        @ compile' labelManager elseBlock
        @ [LABEL endLabel]
+    
     | Stmt.While (cond, block) ->
       let loopLabel = labelManager#new_label in
       let endLabel  = labelManager#new_label 
@@ -123,6 +126,7 @@ let rec compile stmt =
        @ [CJMP ("z", endLabel)]
        @ compile' labelManager block
        @ [JMP loopLabel; LABEL endLabel]
+    
     | Stmt.Repeat (cond, block) ->
       let loopLabel = labelManager#new_label
       in [LABEL loopLabel]

@@ -124,45 +124,63 @@ module Stmt =
     *)
     let rec eval ((state, input, output) as config) stmt = 
       match stmt with
-        | Read variable -> begin match input with
-          | value :: input' -> 
-            let state' = Expr.update variable value state 
-            in (state', input', output)
-          | [] -> failwith("Empty input")
-          end
+        | Read variable ->
+          let value :: input' = input in
+          let state' = Expr.update variable value state 
+          in (state', input', output)
+        
         | Write expr -> 
           let output' = output @ [Expr.eval state expr]
           in (state, input, output')
+        
         | Assign (variable, expr) -> 
           let state' = Expr.update variable (Expr.eval state expr) state 
           in (state', input, output)
+        
         | Seq (stmt1, stmt2) -> eval (eval config stmt1) stmt2
+        
         | Skip -> config
+        
         | If (cond, thenBlock, elseBlock) -> 
-          if (intToBool (Expr.eval state cond))
+          if (Expr.eval state cond <> 0)
           then eval config thenBlock
           else eval config elseBlock
+        
         | While (cond, block) ->
-          if (intToBool (Expr.eval state cond))
+          if (Expr.eval state cond <> 0)
           then let config' = eval config block
             in eval config' (While (cond, block))
           else config
+        
         | Repeat (cond, block) ->
-          let config' = eval config block
-          in if (not (intToBool (Expr.eval state cond)))
+          let ((state', input', output') as config') = eval config block
+          in if (Expr.eval state' cond == 0)
               then eval config' (Repeat (cond, block))
               else config'
-
+  
     (* Statement parser *)
     ostap (
       read: -"read" -"(" id:IDENT -")" { Read id };
       write: -"write" -"(" e:!(Expr.expr) -")" { Write e };
       assign: id:IDENT -":=" expr:!(Expr.expr) { Assign (id, expr)};
       skip: -"skip" { Skip };
-      ifOp: -"if" cond:!(Expr.expr) -"then" thenBlock:parse -"else" elseBlock:parse -"fi" { If (cond, thenBlock, elseBlock) };
+      
+      ifOp: 
+        -"if" cond:!(Expr.expr) -"then" thenBlock:parse elseBlock:elseStmt -"fi" { If (cond, thenBlock, elseBlock) }
+      | -"if" cond:!(Expr.expr) -"then" thenBlock:parse -"fi" { If (cond, thenBlock, Skip) };
+      
+      elseStmt:
+        -"else" block:parse { block }
+      | -"elif" cond:!(Expr.expr) -"then" thenBlock:parse elseBlock:elseStmt { If (cond, thenBlock, elseBlock) };
+
+      forLoop: -"for" start:parse -"," cond:!(Expr.expr) -"," step:parse -"do" block:parse -"od" { Seq (start, While (cond, Seq (block, step))) };
+
       whileLoop: -"while" cond:!(Expr.expr) -"do" block:parse -"od" { While (cond, block) };
-      repeatLoop: -"repeat" block:parse -"until" cond:!(Expr.expr) { Repeat (cond, block) };
-      statement: read | write | assign | skip | ifOp | whileLoop | repeatLoop ;
+      
+      repeatLoop: -"repeat" block:parse -"until" cond:!(Expr.expr) { Repeat (cond, block) };      
+      
+      statement: read | write | assign | skip | ifOp | forLoop | whileLoop | repeatLoop ;
+      
       parse: <st::sts> :
         !(Util.listBy)
         [ostap (-";")]
