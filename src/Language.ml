@@ -4,6 +4,7 @@
 open GT
 
 (* Opening a library for combinator-based syntax analysis *)
+open Ostap
 open Ostap.Combinators
 
 (* States *)
@@ -55,7 +56,26 @@ module Expr =
         +, -                 --- addition, subtraction
         *, /, %              --- multiplication, division, reminder
     *)
-      
+
+    let int_to_bool i = if (i == 0) then false else true
+    let bool_to_int b = if b then 1 else 0
+
+    let eval_binop op left right = match op with
+        | "!!" -> bool_to_int(int_to_bool(left) || int_to_bool(right))
+        | "&&" -> bool_to_int(int_to_bool(left) && int_to_bool(right))
+        | "==" -> bool_to_int(left == right)
+        | "!=" -> bool_to_int(left <> right)
+        | "<=" -> bool_to_int(left <= right)
+        | ">=" -> bool_to_int(left >= right)
+        | "<"  -> bool_to_int(left < right)
+        | ">"  -> bool_to_int(left > right)
+        | "+"  -> left + right
+        | "-"  -> left - right
+        | "*"  -> left * right
+        | "/"  -> left / right
+        | "%"  -> left mod right
+        | _ -> failwith("Unknown operator")
+
     (* Expression evaluator
 
           val eval : state -> t -> int
@@ -119,7 +139,11 @@ module Expr =
     )
     
   end
-                    
+
+let default x opt = match opt with
+        | Some v -> v
+        | None   -> x
+
 (* Simple statements: syntax and sematics *)
 module Stmt =
   struct
@@ -133,7 +157,7 @@ module Stmt =
     (* empty statement                  *) | Skip
     (* conditional                      *) | If     of Expr.t * t * t
     (* loop with a pre-condition        *) | While  of Expr.t * t
-    (* loop with a post-condition       *) | Repeat of t * Expr.t
+    (* loop with a post-condition       *) | Repeat of Expr.t * t
     (* call a procedure                 *) | Call   of string * Expr.t list with show
                                                                     
     (* The type of configuration: a state, an input stream, an output stream *)
@@ -150,11 +174,81 @@ module Stmt =
 
        which returns a list of formal parameters and a body for given definition
     *)
-    let rec eval _ = failwith "Not Implemented Yet"
-                                
+    let rec eval env ((state, input, output) as config) stmt = 
+      match stmt with
+        | Read variable ->
+          let value :: input' = input in
+          let state' = State.update variable value state 
+          in (state', input', output)
+        
+        | Write expr -> 
+          let output' = output @ [Expr.eval state expr]
+          in (state, input, output')
+        
+        | Assign (variable, expr) -> 
+          let state' = State.update variable (Expr.eval state expr) state 
+          in (state', input, output)
+        
+        | Seq (stmt1, stmt2) -> eval env (eval env config stmt1) stmt2
+        
+        | Skip -> config
+        
+        | If (cond, then_block, else_block) -> 
+          if (Expr.eval state cond <> 0)
+          then eval env config then_block
+          else eval env config else_block
+        
+        | While (cond, block) ->
+          if (Expr.eval state cond <> 0)
+          then let config' = eval env config block
+            in eval env config' (While (cond, block))
+          else config
+        
+        | Repeat (cond, block) ->
+          let ((state', input', output') as config') = eval env config block
+          in if (Expr.eval state' cond == 0)
+              then eval env config' (Repeat (cond, block))
+              else config'
+        
+        | Call (func_name, args) ->
+          let args_values = List.map (Expr.eval state) args in
+          let (args, local_vars, body) = env#definition func_name in
+          let new_state = State.push_scope state (args @ local_vars) in
+          let updater = (fun state arg value -> State.update arg value state) in
+          let updated_new_state = List.fold_left2 updater new_state args args_values in
+          let (state', input', output') = eval env (updated_new_state, input, output) body
+          in (State.drop_scope state' state, input', output')
+
     (* Statement parser *)
-    ostap (                                      
-      parse: empty {failwith "Not yet implemented"}
+    ostap (
+      read: -"read" -"(" id:IDENT -")" { Read id };
+      write: -"write" -"(" e:!(Expr.parse) -")" { Write e };
+      assign: id:IDENT -":=" expr:!(Expr.parse) { Assign (id, expr)};
+      skip: -"skip" { Skip };
+      
+      if_op: 
+        -"if" cond:!(Expr.parse) -"then" then_block:parse else_block:else_stmt -"fi" { If (cond, then_block, else_block) }
+      | -"if" cond:!(Expr.parse) -"then" then_block:parse -"fi" { If (cond, then_block, Skip) };
+      
+      else_stmt:
+        -"else" block:parse { block }
+      | -"elif" cond:!(Expr.parse) -"then" then_block:parse else_block:else_stmt { If (cond, then_block, else_block) };
+
+      for_loop: -"for" start:parse -"," cond:!(Expr.parse) -"," step:parse -"do" block:parse -"od" { Seq (start, While (cond, Seq (block, step))) };
+
+      while_loop: -"while" cond:!(Expr.parse) -"do" block:parse -"od" { While (cond, block) };
+      
+      repeat_loop: -"repeat" block:parse -"until" cond:!(Expr.parse) { Repeat (cond, block) };      
+      
+      func_call: func_name:IDENT -"(" args:(!(Util.list)[ostap (!(Expr.parse))])? -")" { Call (func_name, default [] args) };
+
+      statement: read | write | assign | skip | if_op | for_loop | while_loop | repeat_loop | func_call;
+      
+      parse: <st::sts> :
+        !(Util.listBy)
+        [ostap (-";")]
+        [statement]
+        { List.fold_left (fun st1 st2 -> Seq (st1, st2) ) st sts}
     )
       
   end
@@ -167,7 +261,9 @@ module Definition =
     type t = string * (string list * string list * Stmt.t)
 
     ostap (                                      
-      parse: empty {failwith "Not yet implemented"}
+      parse: -"fun" func_name:IDENT -"(" args:!(Util.list)[ostap (IDENT)]? -")"
+             local_vars:(-"local" !(Util.list)[ostap (IDENT)])? -"{" body:!(Stmt.parse) -"}" 
+             {(func_name, (default [] args, default [] local_vars, body))}
     )
 
   end
