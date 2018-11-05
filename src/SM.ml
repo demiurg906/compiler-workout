@@ -82,6 +82,7 @@ let rec eval env ((call_stack, stack, ((state, input, output) as conf)) as confi
         end
         in eval env config' prog
 
+
 (* Top-level evaluation
 
      val run : prg -> int list -> int list
@@ -97,7 +98,7 @@ let run p i =
   | _ :: tl         -> make_map m tl
   in
   let m = make_map M.empty p in
-  let (_, _, (_, _, o)) = eval (object method labeled l = M.find l m end) ([], [], (State.empty, i, [])) p in o
+  let (_, _, (_, _, o, _)) = eval (object method labeled l = M.find l m end) ([], [], (State.empty, i, [], None)) p in o
 
 class label_manager =
  object (self)
