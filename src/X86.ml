@@ -83,6 +83,12 @@ let show instr =
 (* Opening stack machine to use instructions without fully qualified names *)
 open SM
 
+let init n f =
+  let rec init' i n f =
+    if i >= n then []
+    else (f i) :: (init' (i + 1) n f)
+  in init' 0 n f
+
 (* Symbolic stack machine evaluator
 
      compile : env -> prg -> env * instr list
@@ -90,13 +96,125 @@ open SM
    Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
    of x86 instructions
 *)
-let compile env code = failwith "Not implemented"
+let rec compile env prg =
+  let is_hardware (opnd : opnd) : bool = match opnd with
+    | R _ -> true
+    | L _ -> true
+    | _ -> false
+  in
+  
+  let mov (p1 : opnd) (p2 : opnd) : instr list = 
+    if (is_hardware p1 || is_hardware p2)
+      then [Mov (p1, p2)]
+      else [Mov (p1, eax); Mov (eax, p2)]
+  in
+
+  let binop (op : string) (left : opnd) (right : opnd) : instr list =
+    if (is_hardware left || is_hardware right)
+      then [Binop (op, left, right)]
+      else [Mov (right, eax); Binop (op, left, eax); Mov (eax, right)]
+  in
+
+  let step env ins = match ins with
+    | LABEL label -> env, [Label label]
+
+    | JMP label -> env, [Jmp label]
+
+    | CJMP (op, label) -> 
+      let mem, env = env#pop
+      in env, [Binop ("cmp", L 0, mem); CJmp (op, label)]
+    
+    | CONST value ->
+      let mem, env = env#allocate
+      in env, [Mov (L value, mem)]
+    
+    | READ ->
+      let mem, env = env#allocate
+      in env, [Call "Lread"; Mov (eax, mem)]
+
+    | WRITE ->
+      let value, env = env#pop
+      in env, [Push value; Call "Lwrite"; Pop eax]
+  
+    | ST var ->
+      let env' = env#global var in
+      let value, env'' = env'#pop
+      in env'', mov value (env''#loc var)
+    
+    | LD var ->
+      let mem, env = (env#global var)#allocate
+      in env, mov (env#loc var) mem
+
+    | BEGIN (func, args, locals) ->
+      let env = env#enter func args locals
+      in env, [Push ebp; Mov (esp, ebp); Binop ("-", M ("$" ^ env#lsize), esp)]
+
+    | END -> 
+      env, [Label env#epilogue; 
+            Mov (ebp, esp); 
+            Pop ebp; 
+            Ret; 
+            Meta (Printf.sprintf "\t.set %s, %d" env#lsize (env#allocated * word_size))
+            ]
+
+    | CALL (func, n, b) ->
+      let push_state = List.map (fun x -> Push x) env#live_registers in
+      let pop_state = List.map (fun x -> Pop x) @@ List.rev env#live_registers in
+      let env, args_reversed = List.fold_left (fun (env, list) _ -> let s, env = env#pop in env, s::list) (env, []) (init n (fun _ -> ())) in
+      let args = List.rev args_reversed in
+      let push_args = List.map (fun x -> Push x) args in
+      let env, result = if b 
+                              then env, [] 
+                              else (let s, env = env#allocate in env, [Mov (eax, s)]) 
+      in env, push_state 
+            @ push_args
+            @ [Call func; Binop ("+", L (n * word_size), esp)] 
+            @ pop_state 
+            @ result
+
+    | RET is_procedure ->
+      if is_procedure
+        then env, [Jmp env#epilogue]
+        else let s, env = env#pop 
+             in env, [Mov (s, eax); Jmp env#epilogue] 
+    
+    | BINOP op ->
+      let x_mem, y_mem, env = env#pop2 in
+      let res_mem, env = env#allocate
+      in env, match op with
+        | "+" | "-" | "*" -> (binop op x_mem y_mem) @ (mov y_mem res_mem)
+        
+        | "/" -> [Mov (y_mem, eax); Cltd; IDiv x_mem; Mov (eax, res_mem)]
+        
+        | "%" -> [Mov (y_mem, eax); Cltd; IDiv x_mem; Mov (edx, res_mem)]
+
+        | "&&" | "!!" -> [Binop ("^", eax, eax); Binop ("^", edx, edx);
+                          Binop ("cmp", L 0, x_mem); Set ("nz", "%al");
+                          Binop ("cmp", L 0, y_mem); Set ("nz", "%dl");
+                          Binop (op, eax, edx); Mov (edx, res_mem)]
+        
+        | op -> 
+          let x86_op = match op with
+            | "<" -> "l"
+            | ">" -> "g"
+            | "<=" -> "le"
+            | ">=" -> "ge"
+            | "==" -> "e"
+            | "!=" -> "ne"
+          in (binop "cmp" x_mem y_mem) @ [Mov (L 0, eax); Set (x86_op, "%al"); Mov (eax, res_mem)]
+  
+  in match prg with
+    | instr::prg ->
+      let env', x86_ins = step env instr in
+      let env'', x86_insts = compile env' prg 
+      in env'', x86_ins @ x86_insts
+    | [] -> env, []
                                 
 (* A set of strings *)           
 module S = Set.Make (String)
 
 (* Environment implementation *)
-let make_assoc l = List.combine l (List.init (List.length l) (fun x -> x))
+let make_assoc l = List.combine l (init (List.length l) (fun x -> x))
                      
 class env =
   object (self)
