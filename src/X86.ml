@@ -1,3 +1,8 @@
+(* 
+TEST=10
+../src/rc.opt test0$TEST.expr && cat test0$TEST.input | ./test0$TEST > test0$TEST.log && diff test0$TEST.log orig/test0$TEST.log && cat test0$TEST.input | ../src/rc.opt -i test0$TEST.expr > test0$TEST.log && diff test0$TEST.log orig/test0$TEST.log && cat test0$TEST.input | ../src/rc.opt -s test0$TEST.expr > test0$TEST.log && diff test0$TEST.log orig/test0$TEST.log
+*)
+
 (* X86 codegeneration interface *)
 
 (* The registers: *)
@@ -172,11 +177,11 @@ let rec compile env prg =
             @ pop_state 
             @ result
 
-    | RET is_procedure ->
-      if is_procedure
-        then env, [Jmp env#epilogue]
-        else let s, env = env#pop 
-             in env, [Mov (s, eax); Jmp env#epilogue] 
+    | RET is_function ->
+      if is_function
+        then let s, env = env#pop 
+             in env, [Mov (s, eax); Jmp env#epilogue]
+        else env, [Jmp env#epilogue]
     
     | BINOP op ->
       let x_mem, y_mem, env = env#pop2 in
